@@ -75,6 +75,9 @@ struct ast_rtp_instance {
 	struct ast_channel *chan;
 	/*! SRTP info associated with the instance */
 	struct ast_srtp *srtp;
+	/*! Client to mixer Audio Level Indication */
+	int ssrc_audio_level;
+	int vad;
 };
 
 /*! List of RTP engines that are currently registered */
@@ -370,6 +373,32 @@ void ast_rtp_instance_get_remote_address(struct ast_rtp_instance *instance,
 		struct ast_sockaddr *address)
 {
 	ast_sockaddr_copy(address, &instance->remote_address);
+}
+
+void ast_rtp_instance_set_audio_level_indication(struct ast_rtp_instance *instance, int vad_on)
+{
+	//Set ssrc-audio-level as ON/1
+	instance->ssrc_audio_level = 1;
+
+	//Set vad as ON/1 if vad_on is 1
+	if (vad_on == 1) {
+		instance->vad = 1;
+	} else {
+		instance->vad = 0;
+	}
+}
+
+void ast_rtp_instance_get_audio_level_indication(struct ast_rtp_instance *instance, int *ssrc_audio_level, int *vad_on)
+{
+	ssrc_audio_level = 0;
+	vad_on = 0;
+
+	if (instance->ssrc_audio_level == 1) {
+		ssrc_audio_level = 1;
+		if (instance->vad == 1) {
+			vad_on = 1;
+		}
+	}
 }
 
 void ast_rtp_instance_set_extended_prop(struct ast_rtp_instance *instance, int property, void *value)

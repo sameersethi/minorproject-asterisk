@@ -1305,6 +1305,7 @@ static int find_sdp(struct sip_request *req);
 static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action);
 static int process_sdp_o(const char *o, struct sip_pvt *p);
 static int process_sdp_c(const char *c, struct ast_sockaddr *addr);
+static int process_sdp_u(const char *uri, int *ssrc-audio-level, int *vad);
 static int process_sdp_a_sendonly(const char *a, int *sendonly);
 static int process_sdp_a_audio(const char *a, struct sip_pvt *p, struct ast_rtp_codecs *newaudiortp, int *last_rtpmap_codec);
 static int process_sdp_a_video(const char *a, struct sip_pvt *p, struct ast_rtp_codecs *newvideortp, int *last_rtpmap_codec);
@@ -8852,6 +8853,7 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 	char type = '\0';
 	const char *value = NULL;
 	const char *m = NULL;           /* SDP media offer */
+	const char *u = NULL;			/* SDP URI (optional) */
 	const char *nextm = NULL;
 	int len = -1;
 
@@ -8869,6 +8871,10 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 	int vportno = -1;		/*!< RTP Video port number */
 	int tportno = -1;		/*!< RTP Text port number */
 	int udptlportno = -1;		/*!< UDPTL Image port number */
+
+	/* Client-to-Mixer Audio Level Indication Information */
+	int ssrc_audio_level = FALSE;
+	int vad = FALSE;
 
 	/* Peer capability is the capability in the SDP, non codec is RFC2833 DTMF (101) */	
 	struct ast_format_cap *peercapability = ast_format_cap_alloc_nolock();
@@ -8978,7 +8984,13 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 			else if (process_sdp_a_image(value, p))
 				processed = TRUE;
 			break;
+		case 'u':
+			if (process_sdp_u(value, &ssrc_audio_level, &vad)) {
+				processed = TRUE;
+			}
+			break;
 		}
+
 
 		ast_debug(3, "Processing session-level SDP %c=%s... %s\n", type, value, (processed == TRUE)? "OK." : "UNSUPPORTED.");
 	}
@@ -9302,9 +9314,11 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 		if (portno > 0) {
 			ast_sockaddr_set_port(sa, portno);
 			ast_rtp_instance_set_remote_address(p->rtp, sa);
+			ast_rtp_instance_set_audio_level_indication(p->rtp, ssrc_audio_level, vad);
 			if (debug) {
 				ast_verbose("Peer audio RTP is at port %s\n",
 					    ast_sockaddr_stringify(sa));
+				ast_verbose("Audio Level Indication: %d, VAD: %d", ssrc_audio_level, vad);
 			}
 
 			ast_rtp_codecs_payloads_copy(&newaudiortp, ast_rtp_instance_get_codecs(p->rtp), p->rtp);
@@ -9602,6 +9616,23 @@ static int process_sdp_c(const char *c, struct ast_sockaddr *addr)
 		return FALSE;
 	}
 	return FALSE;
+}
+
+static int process_sdp_u(const char *uri, int *ssrc-audio-level, int *vad)
+{
+	int found = FALSE;
+	int ssrc-audio-level = FALSE;
+	int vad = FALSE;
+
+	if(!strcasecmp(uri, "ssrc-audio-level")) {
+		ssrc-audio-level = TRUE;
+		if(!strcasecmp(uri, "")) {
+			vad = TRUE;
+		}
+		found = TRUE;
+	}
+
+	return found;
 }
 
 static int process_sdp_a_sendonly(const char *a, int *sendonly)
