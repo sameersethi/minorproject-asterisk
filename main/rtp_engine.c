@@ -76,6 +76,7 @@ struct ast_rtp_instance {
 	/*! SRTP info associated with the instance */
 	struct ast_srtp *srtp;
 	/*! Client to mixer Audio Level Indication */
+	int extmap;
 	int ssrc_audio_level;
 	int vad;
 };
@@ -375,10 +376,11 @@ void ast_rtp_instance_get_remote_address(struct ast_rtp_instance *instance,
 	ast_sockaddr_copy(address, &instance->remote_address);
 }
 
-void ast_rtp_instance_set_audio_level_indication(struct ast_rtp_instance *instance, int vad_on)
+void ast_rtp_instance_set_audio_level_indication(struct ast_rtp_instance *instance, int extmap, int vad_on)
 {
 	//Set ssrc-audio-level as ON/1
 	instance->ssrc_audio_level = 1;
+	instance->extmap = extmap;
 
 	//Set vad as ON/1 if vad_on is 1
 	if (vad_on == 1) {
@@ -388,15 +390,18 @@ void ast_rtp_instance_set_audio_level_indication(struct ast_rtp_instance *instan
 	}
 }
 
-void ast_rtp_instance_get_audio_level_indication(struct ast_rtp_instance *instance, int *ssrc_audio_level, int *vad_on)
+void ast_rtp_instance_get_audio_level_indication(struct ast_rtp_instance *instance, int *extmap, int *ssrc_audio_level, int *vad_on)
 {
-	ssrc_audio_level = 0;
-	vad_on = 0;
+	*ssrc_audio_level = 0;
+	*vad_on = 0;
+
+	if(instance->extmap)
+		*extmap = instance->extmap;
 
 	if (instance->ssrc_audio_level == 1) {
-		ssrc_audio_level = 1;
+		*ssrc_audio_level = 1;
 		if (instance->vad == 1) {
-			vad_on = 1;
+			*vad_on = 1;
 		}
 	}
 }

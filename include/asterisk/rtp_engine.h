@@ -816,7 +816,7 @@ int ast_rtp_instance_get_and_cmp_remote_address(struct ast_rtp_instance *instanc
  * \param vad_on The indicator of whether VAD property is ON or not
  *
  */
-void ast_rtp_instance_set_audio_level_indication(struct ast_rtp_instance *instance, int vad_on);
+void ast_rtp_instance_set_audio_level_indication(struct ast_rtp_instance *instance, int extmap, int vad_on);
 
 /*!
  * \brief Check if audio level indication (Client-to-Mixer) is supported
@@ -826,7 +826,7 @@ void ast_rtp_instance_set_audio_level_indication(struct ast_rtp_instance *instan
  * \param vad_on Set the value to 1 indicating VAD property is ON
  *
  */
-void ast_rtp_instance_get_audio_level_indication(struct ast_rtp_instance *instance, int *ssrc_audio_level, int *vad_on);
+void ast_rtp_instance_get_audio_level_indication(struct ast_rtp_instance *instance, int *extmap, int *ssrc_audio_level, int *vad_on);
 
 /*!
  * \brief Set the value of an RTP instance extended property
