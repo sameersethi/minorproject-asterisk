@@ -2267,6 +2267,31 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 
 	/* Look for any RTP extensions, currently we do not support any */
 	if (ext) {
+		/* Code added for Client-to-mixer audio level indication (RFC 6464) */
+		/********************************************************************/
+		if (instance->ssrc_audio_level == 1) {
+			unsigned char ext_data[32];
+			int id, len, V, level;
+
+			ext_data = rtp->rawdata[96+(32*cc)];
+			len = (ext_data & 0x0f000000) >> 24;
+
+			//Check if this is a 1-byte or 2-byte Header
+			if (len==0) {	/*** 1-byte Header ***/
+				id = (ext_data & 0xf0000000) >> 28;
+				V = (ext_data & 0x00800000) >> 23;
+				level = (ext_data & 0x007f0000) >> 16;
+			} else {		/*** 2-byte Header ***/
+				len = (ext_data & 0x00ff0000) >> 16;
+				if (len == 1) {
+					id = (ext_data & 0xff000000) >> 24;
+					V = (ext_data & 0x00008000) >> 15;
+					level = (ext_data & 0x00007f00) >> 8;
+				}
+			}
+		}
+		/*********************************************************************/
+
 		hdrlen += (ntohl(rtpheader[hdrlen/4]) & 0xffff) << 2;
 		hdrlen += 4;
 		if (option_debug) {
