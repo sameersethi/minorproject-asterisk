@@ -9684,11 +9684,11 @@ static int process_sdp_a_audio(const char *a, struct sip_pvt *p, struct ast_rtp_
 			if (debug)
 				ast_verbose("Discarded description format %s for ID %d\n", mimeSubtype, codec);
 		}
-	} else if (sscanf(a, "extmap: %30u/%63s urn:ietf:params:rtp-hdrext:%63s", &extmap, extmap_dir, extmap_type) == 3) {
+	} else if (sscanf(a, "extmap:%30u/%63s urn:ietf:params:rtp-hdrext:%63s", &extmap, extmap_dir, extmap_type) == 3) {
 		ast_debug(1, "%d Found SSRC-AUDIO-LEVEL", 2);
 		if (strcasecmp(extmap_type, "ssrc-audio-level") == 0) {
 			ast_debug(1, "%d Got SSRC AUDIO LEVEL", 3);
-			if(strcasecmp(a, "vad-on") == 0) {
+			if(strcasecmp(a, "vad=on") == 0) {
 				ast_debug(1, "%d Got VAD ON", 4);
 				ast_rtp_instance_set_audio_level_indication(p->rtp, extmap, 1);
 			} else {
@@ -11145,7 +11145,7 @@ static void add_codec_to_sdp(const struct sip_pvt *p,
 		if(ssrc_audio_level == 1 && vad == 1) {
 			ast_str_append(a_buf, 0, "a=extmap:%d/recvonly urn:ietf:params:rtp-hdrext:ssrc-audio-level vad=on\r\n", extmap);
 		} else {
-			ast_str_append(a_buf, 0, "a=extmap:%d/recvonly urn:ietf:params:rtp-hdrext:ssrc-audio-level\r\n", extmap);
+			ast_str_append(a_buf, 0, "a=extmap:%d/recvonly urn:ietf:params:rtp-hdrext:ssrc-audio-level vad=off\r\n", extmap);
 		}
 	}
 

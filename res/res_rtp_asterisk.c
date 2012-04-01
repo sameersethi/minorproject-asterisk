@@ -187,6 +187,9 @@ struct ast_rtp {
 	int learning_probation;		/*!< Sequential packets untill source is valid */
 
 	struct rtp_red *red;
+
+	int rfc6464_on, rfc6464_VBit, rfc6464_audiolevel;
+
 };
 
 /*!
@@ -2265,33 +2268,152 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 		hdrlen += cc * 4;
 	}
 
-	/* Look for any RTP extensions, currently we do not support any */
+	/* 						Look for any RTP extensions 							*/
+	/* ****************************** RFC 3550 **************************************
+	 * If the X bit in the RTP header is one, a variable-length header extension	*
+	 * MUST be appended to the RTP header, following the CSRC list if present.		*
+	 * The header extension contains a 16-bit length field that counts the number	*
+	 * of 32-bit words in the extension, excluding the four-octet extension header	*
+	 * (therefore zero is a valid length).											*
+	 *      0                   1                   2                   3			*
+	 *		0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1			*
+  	 * 	   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+		*
+  	 * 	   |      defined by profile       |           length              |		*
+  	 * 	   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+		*
+  	 * 	   |                        header extension                       |		*
+  	 * 	   |                             ....                              |		*
+	 * ******************************************************************************/
 	if (ext) {
 		/* Code added for Client-to-mixer audio level indication (RFC 6464) */
 		/********************************************************************/
 		if (instance->ssrc_audio_level == 1) {
-			unsigned char ext_data[32];
-			int id, len, V, level;
+			unsigned char ext_hdr[32];
+			int def_by_profile, ext_hdr_len;
 
-			ext_data = rtp->rawdata[96+(32*cc)];
-			len = (ext_data & 0x0f000000) >> 24;
+			/* According to RFC 3550 CSRC Identifiers (if present) start from bit offset 96
+			   and CC field indicates the number of CSRC identifiers (if present).*/
+			ext_hdr = rtp->rawdata[96+(32*cc)];
+			//Get "defined by profile" value
+			def_by_profile = (ext_hdr & 0xffff0000) >> 16;
+			//Get "length"
+			ext_hdr_len = (ext_hdr & 0x0000ffff);
 
-			//Check if this is a 1-byte or 2-byte Header
-			if (len==0) {	/*** 1-byte Header ***/
-				id = (ext_data & 0xf0000000) >> 28;
-				V = (ext_data & 0x00800000) >> 23;
-				level = (ext_data & 0x007f0000) >> 16;
-			} else {		/*** 2-byte Header ***/
-				len = (ext_data & 0x00ff0000) >> 16;
-				if (len == 1) {
-					id = (ext_data & 0xff000000) >> 24;
-					V = (ext_data & 0x00008000) >> 15;
-					level = (ext_data & 0x00007f00) >> 8;
+			//Check if this is a 1-byte or 2-byte header
+			if (def_by_profile == 0xBEDE) {	/*** 1-byte Header ***/
+			      /* ******************* *
+			       *    1-byte Header    *
+			       *   0				 *
+			       *   0 1 2 3 4 5 6 7	 *
+			       *  +-+-+-+-+-+-+-+-+	 *
+			       *  |  ID   |  len  |	 *
+			       *  +-+-+-+-+-+-+-+-+  *
+			       * ******************* */
+				//Check if length is greater than zero
+				if (ext_hdr_len > 0) {
+					unsigned char ext_data[8];
+					int ID, len;
+					unsigned char *data;
+					int count;
+
+					count = 96+(32*cc)+32;
+
+					for (int i=0; i < ext_hdr_len*4; i++) {
+						memcpy(ext_data, rtp->rawdata[count], 8);
+						//Check if this is not a padding byte
+						if (atoi(ext_data) != 0) {
+							ID = (ext_data & 0xf0) >> 4;
+							/* ********************* RFC 6464 ********************* */
+							//Let's check if this ID matches the extmap received in SDP
+							if (ID == instance->extmap) {
+								len = (ext_data & 0x0f);
+								count += 8;
+								data = malloc((len+1)*8);
+								memcpy(data, rtp->rawdata[count], (len+1)*8);
+								count += (len+1)*8;
+
+			                    /***************************************
+			                     * ************ RFC 6464 ************* *
+			                     * 	 0                   1			   *
+			                     *	 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5   *
+			                   	 *	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+  *
+			                   	 *	|  ID   | len=0 |V| level       |  *
+			                     *	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+  *
+			                     ***************************************/
+								//Cross-check if length is 1 byte
+								if (len == 0) {
+									rtp->rfc6464_VBit = (data & 0x80) >> 7;
+									rtp->rfc6464_audiolevel = (data & 0x7F);
+									rtp->rfc6464_on = 1;
+								}
+								free(data);
+							}
+						}
+					}
+				}
+
+			} else {						/*** Check if it is indeed 2-byte Header ***/
+				int defbyprof, appbits;
+
+			    /*****************************************
+			     *    0                   1				 *
+			     *    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5	 *
+			     *   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+	 *
+			     *   |         0x100         |appbits|	 *
+			     *   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+	 *
+			     *****************************************/
+				//"defined by profile" in 2-byte header is first 12 bits
+				defbyprof = (def_by_profile & 0xfff0) >> 4;
+				appbits = (def_by_profile & 0x000f);
+
+				if (defbyprof == 0x100) {	/*** Confirmed -- 2-byte header ***/
+					//Check if length is greater than zero
+					if (ext_hdr_len > 0) {
+						unsigned char ext_data[16];
+						int ID, len;
+						unsigned char *data;
+						int count;
+
+						count = 96+(32*cc)+32;
+
+						for (int i=0; i < ext_hdr_len*2; i++) {
+							memcpy(ext_data, rtp->rawdata[count], 16);
+							//Check if this is not a padding byte
+							if (atoi(ext_data) != 0) {
+								ID = (ext_data & 0xff00) >> 8;
+								/* ********************* RFC 6464 ********************* */
+								//Let's check if this ID matches the extmap received in SDP
+								if (ID == instance->extmap) {
+									len = (ext_data & 0x00ff);
+									count += 16;
+									data = malloc((len+1)*8);
+									memcpy(data, rtp->rawdata[count], (len+1)*8);
+									count += (len+1)*8;
+
+									/*********************************************************************
+									 * *************************** RFC 6464 ******************************
+									 *  0                   1                   2                   3    *
+								     *  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1  *
+								     * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+ *
+								     * |      ID       |     len=1     |V|    level    |    0 (pad)    | *
+								     * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+ *
+								     *********************************************************************/
+									//Cross-check if length is 1 byte
+									if (len == 1) {
+										rtp->rfc6464_VBit = (data & 0x8000) >> 15;
+										rtp->rfc6464_audiolevel = (data & 0x7F00) >> 8;
+										rtp->rfc6464_on = 1;
+									}
+									free(data);
+								}
+							}
+						}
+
+				} else {					/*** Malformed Packet ***/
+
 				}
 			}
 		}
-		/*********************************************************************/
-
+	} else {
 		hdrlen += (ntohl(rtpheader[hdrlen/4]) & 0xffff) << 2;
 		hdrlen += 4;
 		if (option_debug) {
@@ -2303,6 +2425,7 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 				ast_debug(1, "Found unknown RTP Extensions %x\n", profile);
 		}
 	}
+
 
 	/* Make sure after we potentially mucked with the header length that it is once again valid */
 	if (res < hdrlen) {
