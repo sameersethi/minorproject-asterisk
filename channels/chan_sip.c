@@ -11136,19 +11136,6 @@ static void add_codec_to_sdp(const struct sip_pvt *p,
 		break;
 	}
 
-	if (p->rtp) {
-		ast_debug(1, "%d I'm in add_codec_to_sdp", 1);
-		int extmap, ssrc_audio_level, vad;
-
-		ast_rtp_instance_get_audio_level_indication(p->rtp, &extmap, &ssrc_audio_level, &vad);
-
-		if(ssrc_audio_level == 1 && vad == 1) {
-			ast_str_append(a_buf, 0, "a=extmap:%d/recvonly urn:ietf:params:rtp-hdrext:ssrc-audio-level vad=on\r\n", extmap);
-		} else {
-			ast_str_append(a_buf, 0, "a=extmap:%d/recvonly urn:ietf:params:rtp-hdrext:ssrc-audio-level vad=off\r\n", extmap);
-		}
-	}
-
 	if (fmt.cur_ms && (fmt.cur_ms < *min_packet_size))
 		*min_packet_size = fmt.cur_ms;
 
@@ -11654,6 +11641,22 @@ static enum sip_result add_sdp(struct sip_request *resp, struct sip_pvt *p, int 
 		/* XXX don't think you can have ptime for text */
 		if (min_text_packet_size)
 			ast_str_append(&a_text, 0, "a=ptime:%d\r\n", min_text_packet_size);
+
+		/* ********* RFC 6464 ********** *
+		 * ***************************** *
+		 * ***************************** */
+		if (p->rtp) {
+			ast_debug(1, "%d I'm in add_codec_to_sdp", 1);
+			int extmap, ssrc_audio_level, vad;
+
+			ast_rtp_instance_get_audio_level_indication(p->rtp, &extmap, &ssrc_audio_level, &vad);
+
+			if(ssrc_audio_level == 1 && vad == 1) {
+				ast_str_append(&a_audio, 0, "a=extmap:%d/recvonly urn:ietf:params:rtp-hdrext:ssrc-audio-level vad=on\r\n", extmap);
+			} else {
+				ast_str_append(&a_audio, 0, "a=extmap:%d/recvonly urn:ietf:params:rtp-hdrext:ssrc-audio-level vad=off\r\n", extmap);
+			}
+		}
 
 		if (m_audio->len - m_audio->used < 2 || m_video->len - m_video->used < 2 ||
 		    m_text->len - m_text->used < 2 || a_text->len - a_text->used < 2 ||

@@ -166,6 +166,10 @@ struct ast_frame {
 	long len;
 	/*! Sequence number */
 	int seqno;
+	/*! Is RFC 6464 On */
+	int RFC6464_On;
+	/*! RFC 6464 Audio Level - Only if RFC6464_On is true */
+	int RFC6464_audioLevel;
 };
 
 /*!

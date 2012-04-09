@@ -125,7 +125,7 @@ OVERWRITE=y
 
 # Include debug and macro symbols in the executables (-g) and profiling info (-pg)
 DEBUG=-g3
-
+#DEBUG=-pg
 # Asterisk.conf is located in ASTETCDIR or by using the -C flag
 # when starting Asterisk
 ASTCONFPATH=$(ASTETCDIR)/asterisk.conf

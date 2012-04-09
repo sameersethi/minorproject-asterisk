@@ -2284,22 +2284,32 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
   	 * 	   |                             ....                              |		*
 	 * ******************************************************************************/
 	if (ext) {
+		hdrlen += 6;
+
+		rtp->rfc6464_VBit = -1;
+		rtp->rfc6464_audiolevel = -1;
+		rtp->rfc6464_on = 0;
+
 		/* Code added for Client-to-mixer audio level indication (RFC 6464) */
 		/********************************************************************/
-		if (instance->ssrc_audio_level == 1) {
-			unsigned char ext_hdr[32];
+		int extmap, ssrc_audio_level, vad_on;
+		ast_rtp_instance_get_audio_level_indication(instance, &extmap, &ssrc_audio_level, &vad_on);
+		if (ssrc_audio_level == 1) {
+			unsigned int ext_hdr;
 			int def_by_profile, ext_hdr_len;
 
 			/* According to RFC 3550 CSRC Identifiers (if present) start from bit offset 96
 			   and CC field indicates the number of CSRC identifiers (if present).*/
-			ext_hdr = rtp->rawdata[96+(32*cc)];
+			ext_hdr = ntohl(rtpheader[3+cc]);
 			//Get "defined by profile" value
 			def_by_profile = (ext_hdr & 0xffff0000) >> 16;
 			//Get "length"
 			ext_hdr_len = (ext_hdr & 0x0000ffff);
 
-			//Check if this is a 1-byte or 2-byte header
-			if (def_by_profile == 0xBEDE) {	/*** 1-byte Header ***/
+			ast_debug(1, "I'm here parsing the RTP extension. Def by Prof: %d Hdr Len: %d\n", def_by_profile, ext_hdr_len);
+
+			//Check if this is a 1-byte  header
+			if (def_by_profile == 48862) {	/*** 1-byte Header 0xBEDE == 0d48862 ***/
 			      /* ******************* *
 			       *    1-byte Header    *
 			       *   0				 *
@@ -2308,122 +2318,48 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 			       *  |  ID   |  len  |	 *
 			       *  +-+-+-+-+-+-+-+-+  *
 			       * ******************* */
+				ast_debug(1, "I'm here parsing the RTP extension. 1\n");
+
 				//Check if length is greater than zero
 				if (ext_hdr_len > 0) {
-					unsigned char ext_data[8];
+					unsigned int ext_data;
 					int ID, len;
-					unsigned char *data;
-					int count;
 
-					count = 96+(32*cc)+32;
+					ext_data = (ntohl(rtpheader[3+cc+1]));
 
-					for (int i=0; i < ext_hdr_len*4; i++) {
-						memcpy(ext_data, rtp->rawdata[count], 8);
-						//Check if this is not a padding byte
-						if (atoi(ext_data) != 0) {
-							ID = (ext_data & 0xf0) >> 4;
-							/* ********************* RFC 6464 ********************* */
-							//Let's check if this ID matches the extmap received in SDP
-							if (ID == instance->extmap) {
-								len = (ext_data & 0x0f);
-								count += 8;
-								data = malloc((len+1)*8);
-								memcpy(data, rtp->rawdata[count], (len+1)*8);
-								count += (len+1)*8;
+					ID = (ext_data & 0xf0000000) >> 28;
+					/* ********************* RFC 6464 ********************* */
+					//Let's check if this ID matches the extmap received in SDP
+					if (ID == extmap) {
+						len = (ext_data & 0x0f000000) >> 24;
 
-			                    /***************************************
-			                     * ************ RFC 6464 ************* *
-			                     * 	 0                   1			   *
-			                     *	 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5   *
-			                   	 *	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+  *
-			                   	 *	|  ID   | len=0 |V| level       |  *
-			                     *	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+  *
-			                     ***************************************/
-								//Cross-check if length is 1 byte
-								if (len == 0) {
-									rtp->rfc6464_VBit = (data & 0x80) >> 7;
-									rtp->rfc6464_audiolevel = (data & 0x7F);
-									rtp->rfc6464_on = 1;
-								}
-								free(data);
-							}
+	                    /***************************************
+	                     * ************ RFC 6464 ************* *
+	                     * 	 0                   1			   *
+	                     *	 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5   *
+	                   	 *	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+  *
+	                   	 *	|  ID   | len=0 |V| level       |  *
+	                     *	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+  *
+	                     ***************************************/
+						//Cross-check if length is 1 byte
+						if (len == 0) {
+							rtp->rfc6464_VBit = (ext_data & 0x00800000) >> 23;
+							rtp->rfc6464_audiolevel = (ext_data & 0x007F0000) >> 16;
+							rtp->rfc6464_on = 1;
+
+							ast_debug(1, "I'm here parsing the RTP extension. Finally!! Audio Level: %d\n", rtp->rfc6464_audiolevel);
 						}
 					}
 				}
 
-			} else {						/*** Check if it is indeed 2-byte Header ***/
-				int defbyprof, appbits;
-
-			    /*****************************************
-			     *    0                   1				 *
-			     *    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5	 *
-			     *   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+	 *
-			     *   |         0x100         |appbits|	 *
-			     *   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+	 *
-			     *****************************************/
-				//"defined by profile" in 2-byte header is first 12 bits
-				defbyprof = (def_by_profile & 0xfff0) >> 4;
-				appbits = (def_by_profile & 0x000f);
-
-				if (defbyprof == 0x100) {	/*** Confirmed -- 2-byte header ***/
-					//Check if length is greater than zero
-					if (ext_hdr_len > 0) {
-						unsigned char ext_data[16];
-						int ID, len;
-						unsigned char *data;
-						int count;
-
-						count = 96+(32*cc)+32;
-
-						for (int i=0; i < ext_hdr_len*2; i++) {
-							memcpy(ext_data, rtp->rawdata[count], 16);
-							//Check if this is not a padding byte
-							if (atoi(ext_data) != 0) {
-								ID = (ext_data & 0xff00) >> 8;
-								/* ********************* RFC 6464 ********************* */
-								//Let's check if this ID matches the extmap received in SDP
-								if (ID == instance->extmap) {
-									len = (ext_data & 0x00ff);
-									count += 16;
-									data = malloc((len+1)*8);
-									memcpy(data, rtp->rawdata[count], (len+1)*8);
-									count += (len+1)*8;
-
-									/*********************************************************************
-									 * *************************** RFC 6464 ******************************
-									 *  0                   1                   2                   3    *
-								     *  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1  *
-								     * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+ *
-								     * |      ID       |     len=1     |V|    level    |    0 (pad)    | *
-								     * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+ *
-								     *********************************************************************/
-									//Cross-check if length is 1 byte
-									if (len == 1) {
-										rtp->rfc6464_VBit = (data & 0x8000) >> 15;
-										rtp->rfc6464_audiolevel = (data & 0x7F00) >> 8;
-										rtp->rfc6464_on = 1;
-									}
-									free(data);
-								}
-							}
-						}
-
-				} else {					/*** Malformed Packet ***/
-
-				}
+			} else {
+				ast_debug(1, "I'm here parsing the RTP extension. Error: Only 1-byte Hdr supported\n");
 			}
 		}
 	} else {
-		hdrlen += (ntohl(rtpheader[hdrlen/4]) & 0xffff) << 2;
-		hdrlen += 4;
-		if (option_debug) {
-			int profile;
-			profile = (ntohl(rtpheader[3]) & 0xffff0000) >> 16;
-			if (profile == 0x505a)
-				ast_debug(1, "Found Zfone extension in RTP stream - zrtp - not supported.\n");
-			else
-				ast_debug(1, "Found unknown RTP Extensions %x\n", profile);
-		}
+		rtp->rfc6464_VBit = -1;
+		rtp->rfc6464_audiolevel = -1;
+		rtp->rfc6464_on = 0;
 	}
 
 
@@ -2525,6 +2461,15 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 	rtp->f.data.ptr = rtp->rawdata + hdrlen + AST_FRIENDLY_OFFSET;
 	rtp->f.offset = hdrlen + AST_FRIENDLY_OFFSET;
 	rtp->f.seqno = seqno;
+
+	/* Set the RFC 6464 variables if we received them */
+	if (rtp->rfc6464_on == 1) {
+		rtp->f.RFC6464_On = 1;
+		rtp->f.RFC6464_audioLevel = rtp->rfc6464_audiolevel;
+	} else {
+		rtp->f.RFC6464_On = 0;
+		rtp->f.RFC6464_audioLevel = -1;
+	}
 
 	if (rtp->f.subclass.format.id == AST_FORMAT_T140 && (int)seqno - (prev_seqno+1) > 0 && (int)seqno - (prev_seqno+1) < 10) {
 		unsigned char *data = rtp->f.data.ptr;

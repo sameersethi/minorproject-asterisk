@@ -130,6 +130,9 @@ struct ast_bridge_tech_optimizations {
 	/*! Whether or not the bridging technology should drop audio
 	 *  detected as silence from the mix. */
 	unsigned int drop_silence:1;
+	/*! The maximum number of talkers that should be mixed in the conference.
+	 *  These number of loudest talkers of the conference will be added to the mix. */
+	unsigned int max_num_talkers;
 };
 
 /*!
