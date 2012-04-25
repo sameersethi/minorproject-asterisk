@@ -4237,30 +4237,42 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 					}
 				}
 
-				if (chan->readtrans && (f = ast_translate(chan->readtrans, f, 1)) == NULL) {
-					f = &ast_null_frame;
-				}
+				/* Code added for RFC 6464
+				 * ** If we have received the audio level in the RTP Extension Header, then it can be used to
+				 * ** determine if the channel is silent or not. If silent, we won't mix it in the conference.
+				 */
+				if (chan->RFC6464_Enabled == 1) {
+					ast_debug(1, "Hey I'm Here Chan: '%s'; Received frame but adding to rfc6464q. Seq No: %d \n", chan->name, f->seqno);
+					struct ast_frame *frame = ast_frdup(f);
+					AST_LIST_INSERT_TAIL(&chan->rfc6464q, frame, frame_list);
 
-				/* it is possible for the translation process on chan->readtrans to have
-				   produced multiple frames from the single input frame we passed it; if
-				   this happens, queue the additional frames *before* the frames we may
-				   have queued earlier. if the readq was empty, put them at the head of
-				   the queue, and if it was not, put them just after the frame that was
-				   at the end of the queue.
-				*/
-				if (AST_LIST_NEXT(f, frame_list)) {
-					if (!readq_tail) {
-						ast_queue_frame_head(chan, AST_LIST_NEXT(f, frame_list));
-					} else {
-						__ast_queue_frame(chan, AST_LIST_NEXT(f, frame_list), 0, readq_tail);
+				} else {
+
+					if (chan->readtrans && (f = ast_translate(chan->readtrans, f, 1)) == NULL) {
+						f = &ast_null_frame;
 					}
-					ast_frfree(AST_LIST_NEXT(f, frame_list));
-					AST_LIST_NEXT(f, frame_list) = NULL;
-				}
 
-				/* Run generator sitting on the line if timing device not available
-				* and synchronous generation of outgoing frames is necessary       */
-				ast_read_generator_actions(chan, f);
+					/* it is possible for the translation process on chan->readtrans to have
+					   produced multiple frames from the single input frame we passed it; if
+					   this happens, queue the additional frames *before* the frames we may
+					   have queued earlier. if the readq was empty, put them at the head of
+					   the queue, and if it was not, put them just after the frame that was
+					   at the end of the queue.
+					*/
+					if (AST_LIST_NEXT(f, frame_list)) {
+						if (!readq_tail) {
+							ast_queue_frame_head(chan, AST_LIST_NEXT(f, frame_list));
+						} else {
+							__ast_queue_frame(chan, AST_LIST_NEXT(f, frame_list), 0, readq_tail);
+						}
+						ast_frfree(AST_LIST_NEXT(f, frame_list));
+						AST_LIST_NEXT(f, frame_list) = NULL;
+					}
+
+					/* Run generator sitting on the line if timing device not available
+					* and synchronous generation of outgoing frames is necessary       */
+					ast_read_generator_actions(chan, f);
+				}
 			}
 			break;
 		default:
@@ -4294,6 +4306,9 @@ done:
 		chan->audiohooks = NULL;
 	}
 	ast_channel_unlock(chan);
+
+	ast_debug(1, "Hey I'm Here Chan 1: '%s'; Received frame .Seq No: %d \n", chan->name, f->seqno);
+
 	return f;
 }
 
@@ -4974,31 +4989,36 @@ int ast_write(struct ast_channel *chan, struct ast_frame *fr)
 		 * ** If we have received the audio level in the RTP Extension Header, then it can be used to
 		 * ** determine if the channel is silent or not. If silent, we won't mix it in the conference.
 		 */
-		if (&fr->RFC6464_On == 1) {
+		/*if (chan->RFC6464_Enabled == 1 && fr->RFC6464_On == 1) {
+			ast_debug(1, "Hey I'm Here Chan: '%s'; Received frame but adding to rfc6464q \n", chan->name);
 
+			AST_LIST_INSERT_TAIL(&chan->rfc6464q, fr, frame_list);
+
+			return 1;
+		}*/
+
+		/* If the frame is in the raw write format, then it's easy... just use the frame - otherwise we will have to translate */
+		if (ast_format_cmp(&fr->subclass.format, &chan->rawwriteformat) != AST_FORMAT_CMP_NOT_EQUAL) {
+			f = fr;
 		} else {
-			/* If the frame is in the raw write format, then it's easy... just use the frame - otherwise we will have to translate */
-			if (ast_format_cmp(&fr->subclass.format, &chan->rawwriteformat) != AST_FORMAT_CMP_NOT_EQUAL) {
-				f = fr;
-			} else {
-				/* XXX Something is not right we are not compatible with this frame bad things can happen
-				 * problems range from no/one-way audio to unexplained line hangups as a last resort try adjust the format
-				 * ideally we do not want to do this and this indicates a deeper problem for now we log these events to
-				 * eliminate user impact and help identify the problem areas
-				 * JIRA issues related to this :-
-				 * ASTERISK-14384, ASTERISK-17502, ASTERISK-17541, ASTERISK-18063, ASTERISK-18325, ASTERISK-18422*/
-				if ((!ast_format_cap_iscompatible(chan->nativeformats, &fr->subclass.format)) &&
-				    (ast_format_cmp(&chan->writeformat, &fr->subclass.format) != AST_FORMAT_CMP_EQUAL)) {
-					char nf[512];
-					ast_log(LOG_WARNING, "Codec mismatch on channel %s setting write format to %s from %s native formats %s\n",
-						chan->name, ast_getformatname(&fr->subclass.format), ast_getformatname(&chan->writeformat),
-						ast_getformatname_multiple(nf, sizeof(nf), chan->nativeformats));
-					ast_set_write_format_by_id(chan, fr->subclass.format.id);
-				}
 
-				f = (chan->writetrans) ? ast_translate(chan->writetrans, fr, 0) : fr;
+			/* XXX Something is not right we are not compatible with this frame bad things can happen
+			 * problems range from no/one-way audio to unexplained line hangups as a last resort try adjust the format
+			 * ideally we do not want to do this and this indicates a deeper problem for now we log these events to
+			 * eliminate user impact and help identify the problem areas
+			 * JIRA issues related to this :-
+			 * ASTERISK-14384, ASTERISK-17502, ASTERISK-17541, ASTERISK-18063, ASTERISK-18325, ASTERISK-18422*/
+			if ((!ast_format_cap_iscompatible(chan->nativeformats, &fr->subclass.format)) &&
+			    (ast_format_cmp(&chan->writeformat, &fr->subclass.format) != AST_FORMAT_CMP_EQUAL)) {
+				char nf[512];
+				ast_log(LOG_WARNING, "Codec mismatch on channel %s setting write format to %s from %s native formats %s\n",
+					chan->name, ast_getformatname(&fr->subclass.format), ast_getformatname(&chan->writeformat),
+					ast_getformatname_multiple(nf, sizeof(nf), chan->nativeformats));
+				ast_set_write_format_by_id(chan, fr->subclass.format.id);
 			}
+			f = (chan->writetrans) ? ast_translate(chan->writetrans, fr, 0) : fr;
 		}
+
 
 
 		if (!f) {

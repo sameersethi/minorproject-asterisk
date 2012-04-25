@@ -7094,6 +7094,15 @@ static struct ast_channel *sip_new(struct sip_pvt *i, int state, const char *tit
 	ast_format_copy(&tmp->rawreadformat, &fmt);
 	ast_rtp_instance_set_read_format(i->rtp, &fmt);
 
+	// Enable RFC6464 on the channel according to the SDP negotiation
+	int extmap, ssrc_audio_level, vad_on;
+	ast_rtp_instance_get_audio_level_indication(i->rtp, &extmap, &ssrc_audio_level, &vad_on);
+	if(ssrc_audio_level == 1) {
+		tmp->RFC6464_Enabled = 1;
+	} else {
+		tmp->RFC6464_Enabled = -1;
+	}
+
 	tmp->tech_pvt = dialog_ref(i, "sip_new: set chan->tech_pvt to i");
 
 	tmp->callgroup = i->callgroup;

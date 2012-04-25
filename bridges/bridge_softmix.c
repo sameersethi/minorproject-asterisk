@@ -521,7 +521,9 @@ static enum ast_bridge_write_result softmix_bridge_write(struct ast_bridge *brid
 
 	/* If we made it here, we are going to write the frame into the conference */
 	ast_mutex_lock(&sc->lock);
-	ast_dsp_silence_with_energy(sc->dsp, frame, &totalsilence, &cur_energy);
+	if (bridge_channel->chan->RFC6464_Enabled != 1) {
+		ast_dsp_silence_with_energy(sc->dsp, frame, &totalsilence, &cur_energy);
+	}
 
 	if (bridge->video_mode.mode == AST_BRIDGE_VIDEO_MODE_TALKER_SRC) {
 		int cur_slot = sc->video_talker.energy_history_cur_slot;
@@ -547,19 +549,26 @@ static enum ast_bridge_write_result softmix_bridge_write(struct ast_bridge *brid
 		sc->talking = 0;
 	}
 
-	/* Before adding audio in, make sure we haven't fallen behind. If audio has fallen
-	 * behind 4 times the amount of samples mixed on every iteration of the mixer, Re-sync
-	 * the audio by flushing the buffer before adding new audio in. */
-	if (ast_slinfactory_available(&sc->factory) > (4 * SOFTMIX_SAMPLES(softmix_data->internal_rate, softmix_data->internal_mixing_interval))) {
-		ast_slinfactory_flush(&sc->factory);
+	if (bridge_channel->chan->RFC6464_Enabled == 1) {
+		sc->talking = 1;
+		ast_debug(1, "Hey I'm Here Chan: '%s'; I have RFC6464 frame. Not feeding it to slinfactory. Will do it later \n", bridge_channel->chan->name);
+	} else {
+
+		/* Before adding audio in, make sure we haven't fallen behind. If audio has fallen
+		 * behind 4 times the amount of samples mixed on every iteration of the mixer, Re-sync
+		 * the audio by flushing the buffer before adding new audio in. */
+		if (ast_slinfactory_available(&sc->factory) > (4 * SOFTMIX_SAMPLES(softmix_data->internal_rate, softmix_data->internal_mixing_interval))) {
+			ast_slinfactory_flush(&sc->factory);
+		}
+
+		/* If a frame was provided add it to the smoother, unless drop silence is enabled and this frame
+		 * is not determined to be talking. */
+		if (!(bridge_channel->tech_args.drop_silence && !sc->talking) &&
+			(frame->frametype == AST_FRAME_VOICE && ast_format_is_slinear(&frame->subclass.format))) {
+			ast_slinfactory_feed(&sc->factory, frame);
+		}
 	}
 
-	/* If a frame was provided add it to the smoother, unless drop silence is enabled and this frame
-	 * is not determined to be talking. */
-	if (!(bridge_channel->tech_args.drop_silence && !sc->talking) &&
-		(frame->frametype == AST_FRAME_VOICE && ast_format_is_slinear(&frame->subclass.format))) {
-		ast_slinfactory_feed(&sc->factory, frame);
-	}
 
 	/* If a frame is ready to be written out, do so */
 	if (sc->have_frame) {
@@ -824,10 +833,46 @@ static int softmix_bridge_thread(struct ast_bridge *bridge)
 				continue;
 			}
 
+			if (bridge_channel->chan->RFC6464_Enabled == 1) {
+				struct ast_frame *frame_ptr;
+				if ((frame_ptr = AST_LIST_REMOVE_HEAD(&bridge_channel->chan->rfc6464q, frame_list))) {
+					//struct ast_frame *f = NULL;
+					//if (bridge_channel->chan->readtrans && (f = ast_translate(bridge_channel->chan->readtrans, f, 1)) == NULL) {
+					//	f = &ast_null_frame;
+					//}
+
+					//if (AST_LIST_NEXT(f, frame_list)) {
+					//	ast_debug(1, "Hey I'm Here Chan: '%s'; Come on. I don't want this. Multiple Frames \n", bridge_channel->chan->name);
+					//}
+
+
+					/* Before adding audio in, make sure we haven't fallen behind. If audio has fallen
+					 * behind 4 times the amount of samples mixed on every iteration of the mixer, Re-sync
+					 * the audio by flushing the buffer before adding new audio in. */
+					if (ast_slinfactory_available(&sc->factory) > (4 * SOFTMIX_SAMPLES(softmix_data->internal_rate, softmix_data->internal_mixing_interval))) {
+						ast_slinfactory_flush(&sc->factory);
+					}
+
+					/* If a frame was provided add it to the smoother, unless drop silence is enabled and this frame
+					 * is not determined to be talking. */
+					if (!(bridge_channel->tech_args.drop_silence && !sc->talking) &&
+						(frame_ptr->frametype == AST_FRAME_VOICE && ast_format_is_slinear(&frame_ptr->subclass.format))) {
+						ast_slinfactory_feed(&sc->factory, frame_ptr);
+					}
+				} else {
+					ast_debug(1, "Hey I'm Here Chan: '%s'; Nothing in rfc6464q \n", bridge_channel->chan->name);
+				}
+
+			}
+
 			/* Try to get audio from the factory if available */
 			ast_mutex_lock(&sc->lock);
 			if ((mixing_array.buffers[mixing_array.used_entries] = softmix_process_read_audio(sc, softmix_samples))) {
 				mixing_array.used_entries++;
+			} else {
+				if (bridge_channel->chan->RFC6464_Enabled == 1) {
+					ast_debug(1, "Hey I'm Here Chan: '%s'; Feeded to slinfactory...But nothing off read_audio. \n", bridge_channel->chan->name);
+				}
 			}
 			ast_mutex_unlock(&sc->lock);
 		}
