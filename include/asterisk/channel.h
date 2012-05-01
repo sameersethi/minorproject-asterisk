@@ -871,6 +871,8 @@ struct ast_channel {
 
 	int RFC6464_Enabled;
 	AST_LIST_HEAD_NOLOCK(, ast_frame) rfc6464q;
+
+	int audioLevel;
 };
 
 /*! \brief ast_channel_tech Properties */
@@ -1279,6 +1281,8 @@ int ast_queue_control_data(struct ast_channel *chan, enum ast_control_frame_type
  * then the individual channels, never the other way around.
  */
 void ast_change_name(struct ast_channel *chan, const char *newname);
+
+int calculate_audio_level(unsigned char * buffer, int size);
 
 /*!
  * \brief Unlink and release reference to a channel

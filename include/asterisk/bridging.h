@@ -246,6 +246,9 @@ struct ast_bridge {
 	size_t array_size;
 	/*! Linked list of channels participating in the bridge */
 	AST_LIST_HEAD_NOLOCK(, ast_bridge_channel) channels;
+
+	AST_LIST_HEAD_NOLOCK(, ast_bridge_channel) loudestChannels;
+	int lastSwitchingTime;
 };
 
 /*! \brief Create a new bridge

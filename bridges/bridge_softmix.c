@@ -814,6 +814,52 @@ static int softmix_bridge_thread(struct ast_bridge *bridge)
 			softmix_translate_helper_change_rate(&trans_helper, softmix_data->internal_rate);
 		}
 
+		/*if (bridge->lastSwitchingTime == -1 || AST_LIST_EMPTY(bridge->loudestChannels) || currentTime - bridge->lastSwitchingTime >= 3) {
+			int loudest = 128, louder = 128, loud = 128;
+			ast_bridge_channel *loudestChannel = NULL, *louderChannel = NULL, *loudChannel = NULL;
+
+			AST_LIST_TRAVERSE(&bridge->channels, bridge_channel, entry) {
+				if (bridge_channel->chan->RFC6464_Enabled) {
+					struct ast_frame *frame_ptr;
+					if (frame_ptr = AST_LIST_FIRST(&bridge_channel->chan->rfc6464q)) {
+						int audioLevel = frame_ptr->RFC6464_audioLevel;
+						if (audioLevel < loudest) {
+							loudest = audioLevel;
+							loudestChannel = bridge_channel;
+						} else if (audioLevel < louder && audioLevel >= loudest) {
+							louder = audioLevel;
+							louderChannel = bridge_channel;
+						} else if (audioLevel < loud && audioLevel >= louder) {
+							loud = audioLevel;
+							loudChannel = bridge_channel;
+						}
+					}
+				} else {
+					struct ast_frame *frame_ptr;
+					struct softmix_channel *sc = bridge_channel->bridge_pvt;
+
+					if (frame_ptr = AST_LIST_FIRST(&sc->factory->queue)) {
+						int audioLevel = frame_ptr->audioLevel;
+						if (audioLevel < loudest) {
+							loudest = audioLevel;
+							loudestChannel = bridge_channel;
+						} else if (audioLevel < louder && audioLevel >= loudest) {
+							louder = audioLevel;
+							louderChannel = bridge_channel;
+						} else if (audioLevel < loud && audioLevel >= louder) {
+							loud = audioLevel;
+							loudChannel = bridge_channel;
+						}
+					}
+				}
+			}
+
+			if (loudestChannel != NULL) {
+				AST_LIST_INSERT_HEAD(&bridge->loudestChannels)
+			}
+		}*/
+
+
 		/* Go through pulling audio from each factory that has it available */
 		AST_LIST_TRAVERSE(&bridge->channels, bridge_channel, entry) {
 			struct softmix_channel *sc = bridge_channel->bridge_pvt;
@@ -834,16 +880,16 @@ static int softmix_bridge_thread(struct ast_bridge *bridge)
 			}
 
 			if (bridge_channel->chan->RFC6464_Enabled == 1) {
-				struct ast_frame *frame_ptr;
-				if ((frame_ptr = AST_LIST_REMOVE_HEAD(&bridge_channel->chan->rfc6464q, frame_list))) {
-					//struct ast_frame *f = NULL;
-					//if (bridge_channel->chan->readtrans && (f = ast_translate(bridge_channel->chan->readtrans, f, 1)) == NULL) {
-					//	f = &ast_null_frame;
-					//}
+				struct ast_frame *f = NULL;
+				if ((f = AST_LIST_REMOVE_HEAD(&bridge_channel->chan->rfc6464q, frame_list))) {
+					if (bridge_channel->chan->readtrans && (f = ast_translate(bridge_channel->chan->readtrans, f, 1)) == NULL) {
+						f = &ast_null_frame;
+						ast_debug(1, "Hey I'm Here Chan: '%s'; Got something after translation. \n", bridge_channel->chan->name);
+					}
 
-					//if (AST_LIST_NEXT(f, frame_list)) {
-					//	ast_debug(1, "Hey I'm Here Chan: '%s'; Come on. I don't want this. Multiple Frames \n", bridge_channel->chan->name);
-					//}
+					if (AST_LIST_NEXT(f, frame_list)) {
+						ast_debug(1, "Hey I'm Here Chan: '%s'; Come on. I don't want this. Multiple Frames \n", bridge_channel->chan->name);
+					}
 
 
 					/* Before adding audio in, make sure we haven't fallen behind. If audio has fallen
@@ -856,8 +902,10 @@ static int softmix_bridge_thread(struct ast_bridge *bridge)
 					/* If a frame was provided add it to the smoother, unless drop silence is enabled and this frame
 					 * is not determined to be talking. */
 					if (!(bridge_channel->tech_args.drop_silence && !sc->talking) &&
-						(frame_ptr->frametype == AST_FRAME_VOICE && ast_format_is_slinear(&frame_ptr->subclass.format))) {
-						ast_slinfactory_feed(&sc->factory, frame_ptr);
+						(f->frametype == AST_FRAME_VOICE && ast_format_is_slinear(&f->subclass.format))) {
+						ast_slinfactory_feed(&sc->factory, f);
+					} else {
+						ast_debug(1, "Hey I'm Here Chan: '%s'; Don't want this..Ahhh!! \n", bridge_channel->chan->name);
 					}
 				} else {
 					ast_debug(1, "Hey I'm Here Chan: '%s'; Nothing in rfc6464q \n", bridge_channel->chan->name);

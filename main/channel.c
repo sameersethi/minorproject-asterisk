@@ -4269,6 +4269,13 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 						AST_LIST_NEXT(f, frame_list) = NULL;
 					}
 
+
+					int audiolevel;
+					audiolevel = calculate_audio_level((unsigned char *)f->data.ptr, f->datalen);
+
+					f->audioLevel = audiolevel;
+
+
 					/* Run generator sitting on the line if timing device not available
 					* and synchronous generation of outgoing frames is necessary       */
 					ast_read_generator_actions(chan, f);
@@ -4310,6 +4317,47 @@ done:
 	ast_debug(1, "Hey I'm Here Chan 1: '%s'; Received frame .Seq No: %d \n", chan->name, f->seqno);
 
 	return f;
+}
+
+int calculate_audio_level(unsigned char * buffer, int size) {
+	double rms = 0;
+	int i;
+	for (i=0; i < size; i++)
+	{
+		double sample = buffer[i];
+
+		sample /= UCHAR_MAX;
+		rms += sample * sample;
+	}
+
+	rms = (size == 0) ? 0 : sqrt(rms / size);
+
+	double MIN_AUDIO_LEVEL = -127;
+	double MAX_AUDIO_LEVEL = 0;
+	double db;
+
+	if (rms > 0)
+	{
+		db = 20 * log10(rms);
+
+		if (db < MIN_AUDIO_LEVEL)
+		{
+			db = MIN_AUDIO_LEVEL;
+		}
+		else if (db > MAX_AUDIO_LEVEL)
+		{
+			db = MAX_AUDIO_LEVEL;
+		}
+	}
+	else
+	{
+		db = MIN_AUDIO_LEVEL;
+	}
+
+	// According to RFC 6464, the max audio level is 0 and min audio level is -127.
+	// But in RTP Header Extension these should be transmitted between 0 and 127.
+	// So a value of 127 in Extension Header signifies -127 dBov in real.
+	return (int)abs(floor(db));
 }
 
 int ast_internal_timing_enabled(struct ast_channel *chan)
