@@ -88,6 +88,18 @@ struct video_follow_talker_data {
 	int energy_average;
 };
 
+struct channel_talker_data {
+	/*! audio energy history */
+	int energy_history[DEFAULT_ENERGY_HISTORY_LEN];
+	/*! The current slot being used in the history buffer, this
+	 *  increments and wraps around */
+	int energy_history_cur_slot;
+	/*! The current energy sum used for averages. */
+	int energy_accum;
+	/*! The current energy average */
+	int energy_average;
+};
+
 /*! \brief Structure which contains per-channel mixing information */
 struct softmix_channel {
 	/*! Lock to protect this structure */
@@ -113,6 +125,8 @@ struct softmix_channel {
 	short our_buf[MAX_DATALEN];
 	/*! Data pertaining to talker mode for video conferencing */
 	struct video_follow_talker_data video_talker;
+
+	struct channel_talker_data audio_talker;
 };
 
 struct softmix_bridge_data {
@@ -521,6 +535,7 @@ static enum ast_bridge_write_result softmix_bridge_write(struct ast_bridge *brid
 
 	/* If we made it here, we are going to write the frame into the conference */
 	ast_mutex_lock(&sc->lock);
+
 	if (bridge_channel->chan->RFC6464_Enabled != 1) {
 		ast_dsp_silence_with_energy(sc->dsp, frame, &totalsilence, &cur_energy);
 	}
@@ -549,7 +564,27 @@ static enum ast_bridge_write_result softmix_bridge_write(struct ast_bridge *brid
 		sc->talking = 0;
 	}
 
-	if (bridge_channel->chan->RFC6464_Enabled == 1) {
+	/* Code added for RFC 6464 */
+	int cur_slot = sc->audio_talker.energy_history_cur_slot;
+	sc->audio_talker.energy_accum -= sc->audio_talker.energy_history[cur_slot];
+	if (bridge_channel->chan->RFC6464_Enabled) {
+		sc->audio_talker.energy_accum += frame->RFC6464_audioLevel;
+		sc->audio_talker.energy_history[cur_slot] = frame->RFC6464_audioLevel;
+	} else {
+		sc->audio_talker.energy_accum += frame->audioLevel;
+		sc->audio_talker.energy_history[cur_slot] = frame->audioLevel;
+	}
+	sc->audio_talker.energy_average = sc->audio_talker.energy_accum / DEFAULT_ENERGY_HISTORY_LEN;
+
+	sc->audio_talker.energy_history_cur_slot++;
+	if (sc->audio_talker.energy_history_cur_slot == DEFAULT_ENERGY_HISTORY_LEN) {
+		sc->audio_talker.energy_history_cur_slot = 0; /* wrap around */
+	}
+
+	ast_debug(1, "Hey I'm Here Chan: '%s'; Average audio level is: %d \n", bridge_channel->chan->name, sc->audio_talker.energy_average);
+
+
+	if (bridge_channel->chan->RFC6464_Enabled == 1 && frame->RFC6464_audioLevel > -127) {
 		sc->talking = 1;
 		ast_debug(1, "Hey I'm Here Chan: '%s'; I have RFC6464 frame. Not feeding it to slinfactory. Will do it later \n", bridge_channel->chan->name);
 	} else {
@@ -814,54 +849,55 @@ static int softmix_bridge_thread(struct ast_bridge *bridge)
 			softmix_translate_helper_change_rate(&trans_helper, softmix_data->internal_rate);
 		}
 
-		/*if (bridge->lastSwitchingTime == -1 || AST_LIST_EMPTY(bridge->loudestChannels) || currentTime - bridge->lastSwitchingTime >= 3) {
-			int loudest = 128, louder = 128, loud = 128;
-			ast_bridge_channel *loudestChannel = NULL, *louderChannel = NULL, *loudChannel = NULL;
 
-			AST_LIST_TRAVERSE(&bridge->channels, bridge_channel, entry) {
-				if (bridge_channel->chan->RFC6464_Enabled) {
-					struct ast_frame *frame_ptr;
-					if (frame_ptr = AST_LIST_FIRST(&bridge_channel->chan->rfc6464q)) {
-						int audioLevel = frame_ptr->RFC6464_audioLevel;
-						if (audioLevel < loudest) {
-							loudest = audioLevel;
-							loudestChannel = bridge_channel;
-						} else if (audioLevel < louder && audioLevel >= loudest) {
-							louder = audioLevel;
-							louderChannel = bridge_channel;
-						} else if (audioLevel < loud && audioLevel >= louder) {
-							loud = audioLevel;
-							loudChannel = bridge_channel;
-						}
-					}
-				} else {
-					struct ast_frame *frame_ptr;
-					struct softmix_channel *sc = bridge_channel->bridge_pvt;
+		int loudest = -128, louder = -128, loud = -128;
+		struct ast_bridge_channel *loudestChannel = NULL, *louderChannel = NULL, *loudChannel = NULL;
 
-					if (frame_ptr = AST_LIST_FIRST(&sc->factory->queue)) {
-						int audioLevel = frame_ptr->audioLevel;
-						if (audioLevel < loudest) {
-							loudest = audioLevel;
-							loudestChannel = bridge_channel;
-						} else if (audioLevel < louder && audioLevel >= loudest) {
-							louder = audioLevel;
-							louderChannel = bridge_channel;
-						} else if (audioLevel < loud && audioLevel >= louder) {
-							loud = audioLevel;
-							loudChannel = bridge_channel;
-						}
-					}
-				}
-			}
-
-			if (loudestChannel != NULL) {
-				AST_LIST_INSERT_HEAD(&bridge->loudestChannels)
-			}
-		}*/
-
-
-		/* Go through pulling audio from each factory that has it available */
 		AST_LIST_TRAVERSE(&bridge->channels, bridge_channel, entry) {
+			struct softmix_channel *s_c = bridge_channel->bridge_pvt;
+
+			int averageLevel;
+			averageLevel = s_c->audio_talker.energy_average;
+			if (averageLevel > loudest) {
+				if (loudest != -128 && loudestChannel) {
+					if (louder != -128 && louderChannel) {
+						loud = louder;
+						loudChannel = louderChannel;
+					}
+					louder = loudest;
+					louderChannel = loudestChannel;
+				}
+
+				loudest = averageLevel;
+				loudestChannel = bridge_channel;
+			} else if (averageLevel > louder && averageLevel <= loudest) {
+				if (louder != -128 && louderChannel) {
+					loud = louder;
+					loudChannel = louderChannel;
+				}
+				louder = averageLevel;
+				louderChannel = bridge_channel;
+			} else if (averageLevel > loud && averageLevel <= louder) {
+				loud = averageLevel;
+				loudChannel = bridge_channel;
+			}
+		}
+
+		ast_debug(1, "Hey I'm Here Chan: ; Loudest: %d \n", loudest);
+		ast_debug(1, "Hey I'm Here Chan: ; Louder: %d \n", louder);
+		ast_debug(1, "Hey I'm Here Chan: ; Loud: %d \n", loud);
+
+		for (i = 0; i < 3; i++) {
+			if (i==0 && loudestChannel) {
+				bridge_channel = loudestChannel;
+			} else if (i==1 && louderChannel) {
+				bridge_channel = louderChannel;
+			} else if (i==2 && loudChannel) {
+				bridge_channel = loudChannel;
+			} else {
+				break;
+			}
+
 			struct softmix_channel *sc = bridge_channel->bridge_pvt;
 
 			/* Update the sample rate to match the bridge's native sample rate if necessary. */
@@ -872,11 +908,6 @@ static int softmix_bridge_thread(struct ast_bridge *bridge)
 			/* If stat_iteration_counter is 0, then collect statistics during this mixing interation */
 			if (!stat_iteration_counter) {
 				gather_softmix_stats(&stats, softmix_data, bridge_channel);
-			}
-
-			/* if the channel is suspended, don't check for audio, but still gather stats */
-			if (bridge_channel->suspended) {
-				continue;
 			}
 
 			if (bridge_channel->chan->RFC6464_Enabled == 1) {
@@ -933,8 +964,17 @@ static int softmix_bridge_thread(struct ast_bridge *bridge)
 			}
 		}
 
-		/* Next step go through removing the channel's own audio and creating a good frame... */
-		AST_LIST_TRAVERSE(&bridge->channels, bridge_channel, entry) {
+		for (i = 0; i < 3; i++) {
+			if (i==0 && loudestChannel) {
+				bridge_channel = loudestChannel;
+			} else if (i==1 && louderChannel) {
+				bridge_channel = louderChannel;
+			} else if (i==2 && loudChannel) {
+				bridge_channel = loudChannel;
+			} else {
+				break;
+			}
+
 			struct softmix_channel *sc = bridge_channel->bridge_pvt;
 
 			if (bridge_channel->suspended) {

@@ -2347,6 +2347,7 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 							rtp->rfc6464_audiolevel = (ext_data & 0x007F0000) >> 16;
 							rtp->rfc6464_on = 1;
 
+							rtp->rfc6464_audiolevel = 0-rtp->rfc6464_audiolevel;
 							ast_debug(1, "I'm here parsing the RTP extension. Finally!! Audio Level: %d\n", rtp->rfc6464_audiolevel);
 						}
 					}

@@ -247,8 +247,10 @@ struct ast_bridge {
 	/*! Linked list of channels participating in the bridge */
 	AST_LIST_HEAD_NOLOCK(, ast_bridge_channel) channels;
 
-	AST_LIST_HEAD_NOLOCK(, ast_bridge_channel) loudestChannels;
-	int lastSwitchingTime;
+	struct ast_bridge_channel *loudestChannel;
+	struct ast_bridge_channel *louderChannel;
+	struct ast_bridge_channel *loudChannel;
+	struct timeval lastSwitchingTime;
 };
 
 /*! \brief Create a new bridge

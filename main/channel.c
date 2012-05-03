@@ -4357,7 +4357,7 @@ int calculate_audio_level(unsigned char * buffer, int size) {
 	// According to RFC 6464, the max audio level is 0 and min audio level is -127.
 	// But in RTP Header Extension these should be transmitted between 0 and 127.
 	// So a value of 127 in Extension Header signifies -127 dBov in real.
-	return (int)abs(floor(db));
+	return (int)(floor(db));
 }
 
 int ast_internal_timing_enabled(struct ast_channel *chan)
